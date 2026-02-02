@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>JaniTracker v1.1.2</title>
+  <title>JaniTracker v1.1.4 (Zustand)</title>
   
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/@babel/standalone@7.28.6/babel.min.js"></script>
@@ -17,6 +17,9 @@
     
     .loader { border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top: 3px solid #8b5cf6; width: 24px; height: 24px; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    
+    /* Добавляем плавность для всей страницы */
+    html { scroll-behavior: smooth; }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-200">
@@ -31,8 +34,10 @@
   </div>
 
   <script type="text/babel" data-presets="react" data-type="module">
-    import React, { useState, useEffect, useMemo } from 'https://esm.sh/react@18.2.0';
+    import React, { useEffect, useMemo } from 'https://esm.sh/react@18.2.0';
     import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client';
+    import { create } from 'https://esm.sh/zustand@4.4.1?deps=react@18.2.0';
+    import { persist } from 'https://esm.sh/zustand@4.4.1/middleware?deps=react@18.2.0';
     import { 
       Plus, Trash2, Edit2, Save, Download, Upload, 
       AlertTriangle, CheckCircle, Clock, Search, X, 
@@ -128,7 +133,128 @@
       }
     };
 
-    const BotCard = ({ bot, onDelete, onEdit, onDuplicate, onPin, t, theme, onToggleCheckitem, viewMode }) => {
+    // --- ZUSTAND STORE ---
+    const useAppStore = create(
+      persist(
+        (set, get) => ({
+          bots: [],
+          lang: 'ru',
+          theme: 'dark',
+          viewMode: 'grid',
+          lastBackup: null,
+
+          isFormOpen: false,
+          editingId: null,
+          searchTerm: "",
+          selectedTags: [],
+          sortType: 'updated_desc',
+          copyFeedback: false,
+          showBackupAlert: false,
+
+          formData: { name: '', link: '', status: 'active', lastUpdated: new Date().toISOString().split('T')[0], notes: '', tags: [], checklist: [], avatar: '' },
+          currentTagInput: '',
+          currentTaskInput: '',
+
+          setLang: (lang) => set({ lang }),
+          setTheme: (theme) => set({ theme }),
+          setViewMode: (viewMode) => set({ viewMode }),
+          setSearchTerm: (searchTerm) => set({ searchTerm }),
+          setSortType: (sortType) => set({ sortType }),
+          setShowBackupAlert: (val) => set({ showBackupAlert: val }),
+          setCopyFeedback: (val) => set({ copyFeedback: val }),
+
+          toggleFilterTag: (tag) => {
+            const { selectedTags } = get();
+            set({ selectedTags: selectedTags.includes(tag) ? selectedTags.filter(t => t !== tag) : [...selectedTags, tag] });
+          },
+          clearFilters: () => set({ selectedTags: [] }),
+
+          resetForm: () => set({ 
+            formData: { name: '', link: '', status: 'active', lastUpdated: new Date().toISOString().split('T')[0], notes: '', tags: [], checklist: [], avatar: '' },
+            currentTagInput: '',
+            currentTaskInput: '',
+            editingId: null
+          }),
+
+          updateFormData: (updates) => set((state) => ({ formData: { ...state.formData, ...updates } })),
+          setCurrentTagInput: (val) => set({ currentTagInput: val }),
+          setCurrentTaskInput: (val) => set({ currentTaskInput: val }),
+
+          openForm: (bot = null) => {
+            if (bot) {
+              set({ 
+                formData: { ...bot, tags: bot.tags || [], checklist: bot.checklist || [], avatar: bot.avatar || '' },
+                editingId: bot.id,
+                isFormOpen: true 
+              });
+            } else {
+              get().resetForm();
+              set({ isFormOpen: true });
+            }
+            // --- ВОЗВРАЩАЕМ АВТОСКРОЛЛ ---
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          },
+          closeForm: () => {
+            set({ isFormOpen: false });
+            get().resetForm();
+          },
+
+          saveBot: () => {
+            const { formData, editingId, bots } = get();
+            if (editingId) {
+              set({ bots: bots.map(bot => bot.id === editingId ? { ...formData, id: editingId } : bot) });
+            } else {
+              set({ bots: [...bots, { ...formData, id: Date.now().toString(), pinned: false }] });
+            }
+            get().closeForm();
+          },
+          deleteBot: (id) => {
+            if (window.confirm("Удалить?")) {
+              set({ bots: get().bots.filter(b => b.id !== id) });
+            }
+          },
+          duplicateBot: (bot) => {
+            if (window.confirm(`Дублировать "${bot.name}"?`)) {
+              const newBot = { ...bot, id: Date.now().toString(), name: `${bot.name} (Copy)`, pinned: false, link: '' };
+              set({ bots: [newBot, ...get().bots] });
+            }
+          },
+          togglePin: (id) => {
+            set({ bots: get().bots.map(b => b.id === id ? { ...b, pinned: !b.pinned } : b) });
+          },
+          toggleTaskInBot: (botId, taskId) => {
+            set({ bots: get().bots.map(bot => {
+              if (bot.id !== botId) return bot;
+              return { ...bot, checklist: bot.checklist.map(item => item.id === taskId ? {...item, done: !item.done} : item) };
+            }) });
+          },
+          resetAll: () => {
+            if (window.confirm("Это удалит ВСЕХ ботов. Продолжить?")) {
+              set({ bots: [] });
+            }
+          },
+          importBots: (newBots, replace = false) => {
+            if (replace) set({ bots: newBots });
+            else set({ bots: [...newBots, ...get().bots] });
+          },
+          setLastBackup: (date) => set({ lastBackup: date, showBackupAlert: false })
+        }),
+        {
+          name: 'janitracker_storage_v4', // Обновили версию хранилища
+          partialize: (state) => ({ 
+            bots: state.bots, 
+            lang: state.lang, 
+            theme: state.theme, 
+            viewMode: state.viewMode,
+            lastBackup: state.lastBackup
+          }),
+        }
+      )
+    );
+
+    const BotCard = ({ bot, t, theme, viewMode }) => {
+      const { deleteBot, openForm, duplicateBot, togglePin, toggleTaskInBot } = useAppStore();
+      
       const calculateDaysSinceUpdate = (dateString) => {
         if (!dateString) return 0;
         const lastUpdate = new Date(dateString);
@@ -157,16 +283,12 @@
         ? (isDark ? "border-violet-500/50 shadow-[0_0_15px_-3px_rgba(139,92,246,0.2)]" : "border-violet-400 shadow-md") 
         : (isDark ? "hover:border-slate-600" : "hover:border-violet-300");
 
-      // --- РЕНДЕР ДЛЯ РЕЖИМА "СПИСОК" ---
       if (viewMode === 'list') {
         return (
           <div className={`backdrop-blur border rounded-lg p-3 transition-all duration-300 group flex items-center gap-4 ${cardBg} ${pinnedStyle}`}>
-             {/* Аватар */}
              <div className={`w-10 h-10 rounded-full flex-shrink-0 bg-cover bg-center border ${isDark ? 'border-slate-600' : 'border-slate-200'}`}
-                 style={{ backgroundImage: bot.avatar ? `url(${bot.avatar})` : 'none' }}>
+                  style={{ backgroundImage: bot.avatar ? `url(${bot.avatar})` : 'none' }}>
             </div>
-            
-            {/* Инфо */}
             <div className="flex-grow min-w-0 flex flex-col sm:flex-row sm:items-center gap-2">
                <div className="flex-grow">
                   <div className="flex items-center gap-2">
@@ -179,67 +301,52 @@
                     <span>{new Date(bot.lastUpdated).toLocaleDateString()}</span>
                   </div>
                </div>
-               
                <div className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1 w-fit ${statusColor}`}>
                   {statusIcon}<span>{days === 0 ? t.today : `${days} ${t.days}`}</span>
                </div>
             </div>
-
-            {/* Кнопки */}
             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-               <button onClick={() => onPin(bot.id)} className={`p-1.5 rounded ${isDark ? 'hover:bg-slate-700' : 'hover:bg-slate-100'} ${bot.pinned ? 'text-violet-500' : 'text-slate-500'}`} title="Pin"><Pin size={14} className={bot.pinned ? "fill-current" : ""} /></button>
-               <button onClick={() => onDuplicate(bot)} className={`p-1.5 rounded ${isDark ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`} title="Clone"><Copy size={14} /></button>
-               <button onClick={() => onEdit(bot)} className={`p-1.5 rounded ${isDark ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`}><Edit2 size={14} /></button>
+               <button onClick={() => togglePin(bot.id)} className={`p-1.5 rounded ${isDark ? 'hover:bg-slate-700' : 'hover:bg-slate-100'} ${bot.pinned ? 'text-violet-500' : 'text-slate-500'}`} title="Pin"><Pin size={14} className={bot.pinned ? "fill-current" : ""} /></button>
+               <button onClick={() => duplicateBot(bot)} className={`p-1.5 rounded ${isDark ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`} title="Clone"><Copy size={14} /></button>
+               <button onClick={() => openForm(bot)} className={`p-1.5 rounded ${isDark ? 'hover:bg-slate-700 text-slate-400' : 'hover:bg-slate-100 text-slate-500'}`}><Edit2 size={14} /></button>
             </div>
           </div>
         );
       }
 
-      // --- РЕНДЕР ДЛЯ РЕЖИМА "ПЛИТКА" (GRID) ---
       return (
         <div className={`backdrop-blur border rounded-xl p-4 transition-all duration-300 group flex flex-col h-full relative ${cardBg} ${pinnedStyle}`}>
-          {/* Кнопка Pin (Абсолютная) */}
-          <button 
-            onClick={() => onPin(bot.id)} 
-            className={`absolute top-2 right-2 p-1.5 rounded-full z-10 transition-all ${bot.pinned ? 'opacity-100 text-violet-500 bg-violet-500/10' : 'opacity-0 group-hover:opacity-100 text-slate-400 hover:bg-slate-700/50'}`}
-          >
+          <button onClick={() => togglePin(bot.id)} className={`absolute top-2 right-2 p-1.5 rounded-full z-10 transition-all ${bot.pinned ? 'opacity-100 text-violet-500 bg-violet-500/10' : 'opacity-0 group-hover:opacity-100 text-slate-400 hover:bg-slate-700/50'}`}>
             <Pin size={14} className={bot.pinned ? "fill-current" : ""} />
           </button>
-
           <div className="flex gap-3 mb-3 pr-6">
             <div className={`w-14 h-14 rounded-full flex-shrink-0 bg-cover bg-center border-2 ${isDark ? 'border-slate-600 bg-slate-700' : 'border-slate-200 bg-slate-100'}`}
                  style={{ backgroundImage: bot.avatar ? `url(${bot.avatar})` : 'none' }}>
                {!bot.avatar && <div className="w-full h-full flex items-center justify-center"><ImageIcon size={20} className="opacity-30"/></div>}
             </div>
             <div className="flex-grow min-w-0">
-              <div className="flex justify-between items-start">
-                 <h3 className={`text-lg font-bold truncate pr-1 ${textColor}`}>{bot.name}</h3>
-              </div>
+               <h3 className={`text-lg font-bold truncate pr-1 ${textColor}`}>{bot.name}</h3>
                <div className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border flex items-center gap-1 w-fit mb-1 ${statusColor}`}>
                   {statusIcon}<span>{days === 0 ? t.today : `${days} ${t.days}`}</span>
-                </div>
+               </div>
               <div className="flex flex-wrap gap-1">
-                {bot.tags && bot.tags.length > 0 ? (
-                   bot.tags.map((tag, idx) => (
-                     <span key={idx} className={`text-[10px] px-1.5 py-0.5 rounded border ${isDark ? 'bg-slate-700/50 border-slate-600 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'}`}>#{tag}</span>
-                   ))
-                ) : <span className="text-[10px] opacity-40 italic">No tags</span>}
+                {bot.tags?.length > 0 ? bot.tags.map((tag, idx) => (
+                  <span key={idx} className={`text-[10px] px-1.5 py-0.5 rounded border ${isDark ? 'bg-slate-700/50 border-slate-600 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'}`}>#{tag}</span>
+                )) : <span className="text-[10px] opacity-40 italic">No tags</span>}
               </div>
             </div>
           </div>
-          
           <div className={`grid grid-cols-2 gap-2 text-xs mb-3 pb-3 border-b ${isDark ? 'border-slate-700/50' : 'border-slate-100'}`}>
             <div><span className={`block opacity-60 mb-0.5`}>{t.statusLabel}</span><span className={`font-medium ${textColor}`}>{t.statuses[bot.status]}</span></div>
             <div className="text-right"><span className={`block opacity-60 mb-0.5`}>{t.dateLabel}</span><span className={`font-medium ${textColor}`}>{new Date(bot.lastUpdated).toLocaleDateString()}</span></div>
           </div>
-          
           <div className="flex-grow flex flex-col gap-3">
-            {bot.checklist && bot.checklist.length > 0 && (
+            {bot.checklist?.length > 0 && (
               <div className={`rounded-lg p-2 ${isDark ? 'bg-slate-900/40' : 'bg-slate-50'}`}>
                 <div className="flex items-center gap-1 mb-1.5 opacity-60 text-xs uppercase font-bold tracking-wider"><CheckSquare size={10} /><span>{t.checklistLabel}</span></div>
                 <div className="space-y-1">
                   {bot.checklist.map((item) => (
-                    <div key={item.id} onClick={() => onToggleCheckitem(bot.id, item.id)} className={`flex items-start gap-2 text-xs cursor-pointer group/item ${item.done ? 'opacity-40' : ''}`}>
+                    <div key={item.id} onClick={() => toggleTaskInBot(bot.id, item.id)} className={`flex items-start gap-2 text-xs cursor-pointer group/item ${item.done ? 'opacity-40' : ''}`}>
                       <div className={`mt-0.5 w-3 h-3 rounded border flex items-center justify-center flex-shrink-0 ${item.done ? 'bg-violet-500 border-violet-500' : 'border-slate-400'}`}>{item.done && <CheckSquare size={8} className="text-white"/>}</div>
                       <span className={`${item.done ? 'line-through' : ''} ${textColor}`}>{item.text}</span>
                     </div>
@@ -249,13 +356,12 @@
             )}
             {bot.notes && <div className={`text-xs italic p-2 rounded border-l-2 overflow-hidden ${isDark ? 'text-slate-400 bg-slate-900/30 border-slate-600' : 'text-slate-600 bg-slate-50 border-slate-300'}`}>"{bot.notes}"</div>}
           </div>
-          
           <div className={`flex gap-2 justify-between items-center mt-4 pt-3 border-t ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
             <a href={bot.link} target="_blank" rel="noreferrer" className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded transition-colors ${!bot.link ? 'opacity-50 pointer-events-none' : ''} ${isDark ? 'hover:bg-slate-700 text-violet-400' : 'hover:bg-slate-100 text-violet-600'}`}><ExternalLink size={14} /><span>Open</span></a>
             <div className="flex gap-1">
-              <button onClick={() => onDuplicate(bot)} className={`p-1.5 rounded transition-colors ${isDark ? 'hover:bg-slate-700 text-slate-400 hover:text-blue-400' : 'hover:bg-slate-100 text-slate-500 hover:text-blue-600'}`} title="Duplicate"><Copy size={16} /></button>
-              <button onClick={() => onEdit(bot)} className={`p-1.5 rounded transition-colors ${isDark ? 'hover:bg-slate-700 text-slate-400 hover:text-blue-400' : 'hover:bg-slate-100 text-slate-500 hover:text-blue-600'}`}><Edit2 size={16} /></button>
-              <button onClick={() => onDelete(bot.id)} className={`p-1.5 rounded transition-colors ${isDark ? 'hover:bg-slate-700 text-slate-400 hover:text-red-400' : 'hover:bg-slate-100 text-slate-500 hover:text-red-600'}`}><Trash2 size={16} /></button>
+              <button onClick={() => duplicateBot(bot)} className={`p-1.5 rounded transition-colors ${isDark ? 'hover:bg-slate-700 text-slate-400 hover:text-blue-400' : 'hover:bg-slate-100 text-slate-500 hover:text-blue-600'}`} title="Duplicate"><Copy size={16} /></button>
+              <button onClick={() => openForm(bot)} className={`p-1.5 rounded transition-colors ${isDark ? 'hover:bg-slate-700 text-slate-400 hover:text-blue-400' : 'hover:bg-slate-100 text-slate-500 hover:text-blue-600'}`}><Edit2 size={16} /></button>
+              <button onClick={() => deleteBot(bot.id)} className={`p-1.5 rounded transition-colors ${isDark ? 'hover:bg-slate-700 text-slate-400 hover:text-red-400' : 'hover:bg-slate-100 text-slate-500 hover:text-red-600'}`}><Trash2 size={16} /></button>
             </div>
           </div>
         </div>
@@ -263,236 +369,126 @@
     };
 
     const App = () => {
-      const [lang, setLang] = useState('ru');
-      const [theme, setTheme] = useState('dark');
-      const t = translations[lang];
+      const s = useAppStore();
+      const t = translations[s.lang];
 
-      const [bots, setBots] = useState(() => {
-        try {
-          const saved = localStorage.getItem('janitracker_bots_v2');
-          if (saved) return JSON.parse(saved);
-          return [];
-        } catch (e) { console.error("Error", e); return []; }
-      });
-      
-      const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'list'
-      const [showBackupAlert, setShowBackupAlert] = useState(false);
-
-      // --- ПРОВЕРКА ДАТЫ ПОСЛЕДНЕГО БЭКАПА ---
       useEffect(() => {
-        const lastBackup = localStorage.getItem('janitracker_last_backup');
-        if (lastBackup) {
-          const days = (new Date() - new Date(lastBackup)) / (1000 * 60 * 60 * 24);
-          if (days > 14) setShowBackupAlert(true);
+        if (s.lastBackup) {
+          const days = (new Date() - new Date(s.lastBackup)) / (1000 * 60 * 60 * 24);
+          if (days > 14) s.setShowBackupAlert(true);
+        } else if (s.bots.length > 5) {
+          s.setShowBackupAlert(true);
         }
-      }, []);
+      }, [s.lastBackup, s.bots.length]);
 
-      const [isFormOpen, setIsFormOpen] = useState(false);
-      const [editingId, setEditingId] = useState(null);
-      const [searchTerm, setSearchTerm] = useState("");
-      const [selectedTags, setSelectedTags] = useState([]);
-      const [sortType, setSortType] = useState('updated_desc'); 
-      const [copyFeedback, setCopyFeedback] = useState(false);
-
-      const [formData, setFormData] = useState({ name: '', link: '', status: 'active', lastUpdated: new Date().toISOString().split('T')[0], notes: '', tags: [], checklist: [], avatar: '' });
-      const [currentTagInput, setCurrentTagInput] = useState('');
-      const [currentTaskInput, setCurrentTaskInput] = useState('');
-
-      useEffect(() => { localStorage.setItem('janitracker_bots_v2', JSON.stringify(bots)); }, [bots]);
-
-      const handleInputChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
-      
       const handleAddTag = (e) => {
-        if (e.key === 'Enter' && currentTagInput.trim()) {
+        if (e.key === 'Enter' && s.currentTagInput.trim()) {
           e.preventDefault();
-          if (!formData.tags.includes(currentTagInput.trim())) setFormData({...formData, tags: [...formData.tags, currentTagInput.trim()]});
-          setCurrentTagInput('');
+          const tag = s.currentTagInput.trim();
+          if (!s.formData.tags.includes(tag)) s.updateFormData({ tags: [...s.formData.tags, tag] });
+          s.setCurrentTagInput('');
         }
       };
-      
-      const removeTag = (tagToRemove) => setFormData({...formData, tags: formData.tags.filter(t => t !== tagToRemove)});
       
       const addTask = (e) => {
-        if (e.key === 'Enter' && currentTaskInput.trim()) {
+        if (e.key === 'Enter' && s.currentTaskInput.trim()) {
           e.preventDefault();
-          const newTask = { id: Date.now(), text: currentTaskInput.trim(), done: false };
-          setFormData({...formData, checklist: [...formData.checklist, newTask]});
-          setCurrentTaskInput('');
+          const newTask = { id: Date.now(), text: s.currentTaskInput.trim(), done: false };
+          s.updateFormData({ checklist: [...s.formData.checklist, newTask] });
+          s.setCurrentTaskInput('');
         }
-      };
-      
-      const toggleTask = (taskId) => setFormData({ ...formData, checklist: formData.checklist.map(task => task.id === taskId ? {...task, done: !task.done} : task) });
-      const removeTask = (taskId) => setFormData({...formData, checklist: formData.checklist.filter(t => t.id !== taskId)});
-
-      const handleSubmit = (e) => {
-        e.preventDefault();
-        if (editingId) {
-          setBots(bots.map(bot => bot.id === editingId ? { ...formData, id: editingId } : bot));
-          setEditingId(null);
-        } else {
-          setBots([...bots, { ...formData, id: Date.now().toString() }]);
-        }
-        resetForm();
-        setIsFormOpen(false);
-      };
-
-      const resetForm = () => setFormData({ name: '', link: '', status: 'active', lastUpdated: new Date().toISOString().split('T')[0], notes: '', tags: [], checklist: [], avatar: '' });
-      
-      const startEdit = (bot) => {
-        setFormData({ ...bot, tags: bot.tags || [], checklist: bot.checklist || [], avatar: bot.avatar || '' });
-        setEditingId(bot.id);
-        setIsFormOpen(true);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      };
-
-      // --- НОВОЕ: ДУБЛИРОВАНИЕ ---
-      const duplicateBot = (bot) => {
-        if(window.confirm(`Duplicate "${bot.name}"?`)) {
-          const newBot = {
-            ...bot,
-            id: Date.now().toString(),
-            name: `${bot.name} (Copy)`,
-            pinned: false, // Копии не закрепляем
-            link: '' // Ссылку лучше очистить, она скорее всего будет другой
-          };
-          setBots([newBot, ...bots]);
-        }
-      };
-
-      // --- НОВОЕ: ЗАКРЕПЛЕНИЕ ---
-      const togglePin = (id) => {
-        setBots(bots.map(b => b.id === id ? { ...b, pinned: !b.pinned } : b));
-      };
-
-      const deleteBot = (id) => { if (window.confirm("Delete?")) setBots(bots.filter(b => b.id !== id)); };
-      const resetAll = () => { if (window.confirm("Это удалит ВСЕХ ботов из памяти. Продолжить?")) { setBots([]); localStorage.removeItem('janitracker_bots_v2'); } };
-
-      const toggleCheckitemInList = (botId, itemId) => {
-        setBots(bots.map(bot => {
-          if (bot.id !== botId) return bot;
-          const updatedChecklist = bot.checklist.map(item => item.id === itemId ? {...item, done: !item.done} : item);
-          return { ...bot, checklist: updatedChecklist };
-        }));
       };
 
       const allTags = useMemo(() => {
         const tags = new Set();
-        bots.forEach(bot => { if(bot.tags) bot.tags.forEach(t => tags.add(t)); });
+        s.bots.forEach(bot => bot.tags?.forEach(t => tags.add(t)));
         return Array.from(tags).sort();
-      }, [bots]);
-
-      const toggleFilterTag = (tag) => {
-        if (selectedTags.includes(tag)) setSelectedTags(selectedTags.filter(t => t !== tag));
-        else setSelectedTags([...selectedTags, tag]);
-      };
+      }, [s.bots]);
 
       const processedBots = useMemo(() => {
-        let result = bots.filter(bot => {
-          const matchesSearch = bot.name.toLowerCase().includes(searchTerm.toLowerCase()) || (bot.notes && bot.notes.toLowerCase().includes(searchTerm.toLowerCase()));
-          const matchesTags = selectedTags.length === 0 || selectedTags.every(tag => bot.tags?.includes(tag));
+        let result = s.bots.filter(bot => {
+          const matchesSearch = bot.name.toLowerCase().includes(s.searchTerm.toLowerCase()) || bot.notes?.toLowerCase().includes(s.searchTerm.toLowerCase());
+          const matchesTags = s.selectedTags.length === 0 || s.selectedTags.every(tag => bot.tags?.includes(tag));
           return matchesSearch && matchesTags;
         });
         
-        // Сортировка: Сначала Pinned, потом по выбранному типу
         return result.sort((a, b) => {
           if (a.pinned && !b.pinned) return -1;
           if (!a.pinned && b.pinned) return 1;
-
-          if (sortType === 'name') return a.name.localeCompare(b.name);
-          if (sortType === 'status') return a.status.localeCompare(b.status);
-          if (sortType === 'updated_asc') return new Date(a.lastUpdated) - new Date(b.lastUpdated);
+          if (s.sortType === 'name') return a.name.localeCompare(b.name);
+          if (s.sortType === 'status') return a.status.localeCompare(b.status);
+          if (s.sortType === 'updated_asc') return new Date(a.lastUpdated) - new Date(b.lastUpdated);
           return new Date(b.lastUpdated) - new Date(a.lastUpdated);
         });
-      }, [bots, searchTerm, selectedTags, sortType]);
+      }, [s.bots, s.searchTerm, s.selectedTags, s.sortType]);
 
-      const stats = { total: bots.length, outdated: bots.filter(b => { const diff = new Date() - new Date(b.lastUpdated); return diff / (1000 * 60 * 60 * 24) > 30; }).length };
+      const stats = { 
+        total: s.bots.length, 
+        outdated: s.bots.filter(b => (new Date() - new Date(b.lastUpdated)) / (1000 * 60 * 60 * 24) > 30).length 
+      };
 
       const exportData = () => {
-        try {
-            const defaultName = `janitracker_backup`;
-            const userSuffix = prompt(t.enterBackupName, "my_bots");
-            if (userSuffix === null) return;
-            
-            const filename = `${defaultName}_${userSuffix || Date.now()}.json`;
-            const dataStr = JSON.stringify(bots, null, 2);
-            const blob = new Blob([dataStr], { type: "application/json" });
-            const url = URL.createObjectURL(blob);
-            
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = filename;
-            link.click();
-            
-            setTimeout(() => URL.revokeObjectURL(url), 500);
-
-            // Сохраняем дату бэкапа
-            localStorage.setItem('janitracker_last_backup', new Date().toISOString());
-            setShowBackupAlert(false);
-
-        } catch (e) {
-            console.error("Backup failed:", e);
-            alert("Ошибка при создании бэкапа: " + e.message);
-        }
+        const userSuffix = prompt(t.enterBackupName, "my_bots");
+        if (userSuffix === null) return;
+        const filename = `janitracker_backup_${userSuffix || Date.now()}.json`;
+        const blob = new Blob([JSON.stringify(s.bots, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url; link.download = filename; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 500);
+        s.setLastBackup(new Date().toISOString());
       };
 
       const importData = async (e) => {
         const files = Array.from(e.target.files);
         if (files.length === 0) return;
         const newBots = [];
-        let backupDetected = false;
-        const readFile = (file) => new Promise((resolve) => { const reader = new FileReader(); reader.onload = (ev) => resolve(ev.target.result); reader.readAsText(file); });
+        let isBackup = false;
+        const readFile = (file) => new Promise((res) => { const r = new FileReader(); r.onload = (ev) => res(ev.target.result); r.readAsText(file); });
         for (const file of files) {
-           try {
-              const text = await readFile(file);
-              const loaded = JSON.parse(text);
-              if (Array.isArray(loaded)) { backupDetected = true; loaded.forEach(b => newBots.push(b)); }
-              else if (loaded && loaded.name) {
-                 newBots.push({
-                    ...loaded,
-                    id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
-                    pinned: false,
-                    notes: loaded.notes ? loaded.notes.replace(/<[^>]*>?/gm, ' ').trim() : ''
-                 });
-              }
-           } catch (err) { console.error("Skipping bad file", file.name); }
+          try {
+            const text = await readFile(file);
+            const loaded = JSON.parse(text);
+            if (Array.isArray(loaded)) { isBackup = true; loaded.forEach(b => newBots.push(b)); }
+            else if (loaded?.name) newBots.push({ ...loaded, id: Date.now().toString() + Math.random().toString(36).substr(2,5), pinned: false });
+          } catch (err) { console.error("Bad file"); }
         }
         if (newBots.length === 0) return;
-        if (files.length === 1 && backupDetected) {
-            if (window.confirm(t.backupRestoreConfirm)) { setBots(newBots); } else { setBots(prev => [...prev, ...newBots]); }
+        if (files.length === 1 && isBackup) {
+          if (window.confirm(t.backupRestoreConfirm)) s.importBots(newBots, true);
+          else s.importBots(newBots, false);
         } else {
-            setBots(prev => [...newBots, ...prev]); 
-            alert(`${t.importSuccess} ${newBots.length}`);
+          s.importBots(newBots, false);
+          alert(`${t.importSuccess} ${newBots.length}`);
         }
         e.target.value = null;
       };
       
       const shareProfile = () => {
-        const publicBots = bots.filter(b => b.status === 'active');
+        const publicBots = s.bots.filter(b => b.status === 'active');
         let text = `✨ My Characters (${publicBots.length}) ✨\n\n`;
         publicBots.forEach(bot => {
           text += `🔹 **${bot.name}**\n`;
           if(bot.link) text += `🔗 ${bot.link}\n`;
-          if(bot.tags && bot.tags.length > 0) text += `🏷️ ${bot.tags.join(', ')}\n`;
+          if(bot.tags?.length > 0) text += `🏷️ ${bot.tags.join(', ')}\n`;
           text += `\n`;
         });
         text += `(Generated by JaniTracker)`;
-        navigator.clipboard.writeText(text).then(() => { setCopyFeedback(true); setTimeout(() => setCopyFeedback(false), 2000); });
+        navigator.clipboard.writeText(text).then(() => { s.setCopyFeedback(true); setTimeout(() => s.setCopyFeedback(false), 2000); });
       };
 
-      const bgMain = theme === 'dark' ? 'bg-slate-950 text-slate-200' : 'bg-slate-50 text-slate-800';
-      const bgHeader = theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm';
-      const inputBg = theme === 'dark' ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-800';
+      const bgMain = s.theme === 'dark' ? 'bg-slate-950 text-slate-200' : 'bg-slate-50 text-slate-800';
+      const bgHeader = s.theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-sm';
+      const inputBg = s.theme === 'dark' ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-800';
 
       return (
         <div className={`min-h-screen font-sans transition-colors duration-300 ${bgMain}`}>
-          
-          {/* АЛЕРТ БЭКАПА */}
-          {showBackupAlert && (
+          {s.showBackupAlert && (
             <div className="bg-amber-600/20 border-b border-amber-500/30 px-4 py-2 flex items-center justify-between text-xs text-amber-200">
                <span className="flex items-center gap-2"><AlertTriangle size={14}/> {t.backupAlert}</span>
                <div className="flex gap-4">
                  <button onClick={exportData} className="underline hover:text-white font-bold">{t.backupBtn}</button>
-                 <button onClick={() => setShowBackupAlert(false)} className="hover:text-white opacity-60">{t.backupDismiss}</button>
+                 <button onClick={() => s.setShowBackupAlert(false)} className="hover:text-white opacity-60">{t.backupDismiss}</button>
                </div>
             </div>
           )}
@@ -502,14 +498,14 @@
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-gradient-to-tr from-violet-600 to-fuchsia-500 rounded-lg flex items-center justify-center text-white shadow-lg shadow-violet-500/20"><CheckSquare size={20} strokeWidth={3} /></div>
-                  <div><h1 className="text-xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-violet-500 to-fuchsia-400">{t.title} <span className="text-xs text-slate-500 font-normal border px-1 rounded ml-1 border-slate-500/30">v1.1.2</span></h1><p className="text-xs opacity-60">{t.subtitle}</p></div>
+                  <div><h1 className="text-xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-violet-500 to-fuchsia-400">{t.title} <span className="text-xs text-slate-500 font-normal border px-1 rounded ml-1 border-slate-500/30">v1.1.4</span></h1><p className="text-xs opacity-60">{t.subtitle}</p></div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <div className={`hidden sm:flex text-xs font-medium px-3 py-1.5 rounded-full border ${theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`}><span className="opacity-60 mr-2">{t.total}:</span> {stats.total}</div>
-                  <div className={`hidden sm:flex text-xs font-medium px-3 py-1.5 rounded-full border ${theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`}><span className="opacity-60 mr-2">{t.outdated}:</span> <span className="text-red-500">{stats.outdated}</span></div>
+                  <div className={`hidden sm:flex text-xs font-medium px-3 py-1.5 rounded-full border ${s.theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`}><span className="opacity-60 mr-2">{t.total}:</span> {stats.total}</div>
+                  <div className={`hidden sm:flex text-xs font-medium px-3 py-1.5 rounded-full border ${s.theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`}><span className="opacity-60 mr-2">{t.outdated}:</span> <span className="text-red-500">{stats.outdated}</span></div>
                   <div className="h-6 w-px bg-slate-500/20 mx-1"></div>
-                  <button onClick={() => setLang(lang === 'ru' ? 'en' : 'ru')} className="p-2 rounded-full hover:bg-black/5 transition-colors flex items-center gap-1 text-xs font-bold uppercase"><Globe size={16} /> {lang}</button>
-                  <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="p-2 rounded-full hover:bg-black/5 transition-colors">{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
+                  <button onClick={() => s.setLang(s.lang === 'ru' ? 'en' : 'ru')} className="p-2 rounded-full hover:bg-black/5 transition-colors flex items-center gap-1 text-xs font-bold uppercase"><Globe size={16} /> {s.lang}</button>
+                  <button onClick={() => s.setTheme(s.theme === 'dark' ? 'light' : 'dark')} className="p-2 rounded-full hover:bg-black/5 transition-colors">{s.theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
                 </div>
               </div>
             </div>
@@ -517,96 +513,80 @@
 
           <div className="max-w-6xl mx-auto px-4 py-8">
             <div className="flex flex-col lg:flex-row gap-4 mb-6">
-              
-              {/* Поиск и Сортировка */}
               <div className="flex-grow flex gap-2">
-                <div className="relative flex-grow"><Search className="absolute left-3 top-2.5 opacity-40" size={18} /><input type="text" placeholder={t.searchPlaceholder} value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className={`w-full rounded-lg pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all text-sm ${inputBg}`}/></div>
-                <select value={sortType} onChange={(e) => setSortType(e.target.value)} className={`rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/50 ${inputBg}`}><option value="updated_desc">{t.sort.newest}</option><option value="updated_asc">{t.sort.oldest}</option><option value="name">{t.sort.name}</option><option value="status">{t.sort.status}</option></select>
-                
-                {/* Переключатель вида */}
-                <div className={`flex rounded-lg border p-1 ${theme === 'dark' ? 'bg-slate-900 border-slate-700' : 'bg-slate-100 border-slate-300'}`}>
-                   <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded ${viewMode === 'grid' ? 'bg-violet-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`} title={t.viewGrid}><LayoutGrid size={16}/></button>
-                   <button onClick={() => setViewMode('list')} className={`p-1.5 rounded ${viewMode === 'list' ? 'bg-violet-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`} title={t.viewList}><List size={16}/></button>
+                <div className="relative flex-grow"><Search className="absolute left-3 top-2.5 opacity-40" size={18} /><input type="text" placeholder={t.searchPlaceholder} value={s.searchTerm} onChange={(e) => s.setSearchTerm(e.target.value)} className={`w-full rounded-lg pl-10 pr-4 py-2 focus:outline-none focus:ring-2 focus:ring-violet-500/50 transition-all text-sm ${inputBg}`}/></div>
+                <select value={s.sortType} onChange={(e) => s.setSortType(e.target.value)} className={`rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500/50 ${inputBg}`}><option value="updated_desc">{t.sort.newest}</option><option value="updated_asc">{t.sort.oldest}</option><option value="name">{t.sort.name}</option><option value="status">{t.sort.status}</option></select>
+                <div className={`flex rounded-lg border p-1 ${s.theme === 'dark' ? 'bg-slate-900 border-slate-700' : 'bg-slate-100 border-slate-300'}`}>
+                   <button onClick={() => s.setViewMode('grid')} className={`p-1.5 rounded ${s.viewMode === 'grid' ? 'bg-violet-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`} title={t.viewGrid}><LayoutGrid size={16}/></button>
+                   <button onClick={() => s.setViewMode('list')} className={`p-1.5 rounded ${s.viewMode === 'list' ? 'bg-violet-600 text-white shadow' : 'text-slate-500 hover:text-slate-300'}`} title={t.viewList}><List size={16}/></button>
                 </div>
               </div>
-
-              <button onClick={() => { setEditingId(null); resetForm(); setIsFormOpen(!isFormOpen); }} className={`flex-shrink-0 flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-medium transition-all shadow-lg ${isFormOpen ? 'bg-slate-500 text-white' : 'bg-violet-600 hover:bg-violet-700 text-white hover:shadow-violet-500/30'}`}>{isFormOpen ? <X size={18}/> : <Plus size={18} />}<span>{isFormOpen ? t.cancelBtn : t.addBtn}</span></button>
+              <button onClick={() => s.isFormOpen ? s.closeForm() : s.openForm()} className={`flex-shrink-0 flex items-center justify-center gap-2 px-6 py-2 rounded-lg font-medium transition-all shadow-lg ${s.isFormOpen ? 'bg-slate-500 text-white' : 'bg-violet-600 hover:bg-violet-700 text-white hover:shadow-violet-500/30'}`}>{s.isFormOpen ? <X size={18}/> : <Plus size={18} />}<span>{s.isFormOpen ? t.cancelBtn : t.addBtn}</span></button>
             </div>
 
             {allTags.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-8 items-center"><span className="text-xs font-bold opacity-50 uppercase tracking-wider flex items-center gap-1"><Filter size={12}/> {t.filters}</span>
-                 {allTags.map(tag => (<button key={tag} onClick={() => toggleFilterTag(tag)} className={`text-xs px-2.5 py-1 rounded-full border transition-all ${selectedTags.includes(tag) ? 'bg-violet-500 border-violet-500 text-white shadow-md shadow-violet-500/20' : `${theme === 'dark' ? 'bg-slate-800 border-slate-700 hover:border-violet-500' : 'bg-white border-slate-300 hover:border-violet-400'}`}`}>#{tag}</button>))}
-                 {selectedTags.length > 0 && <button onClick={() => setSelectedTags([])} className="text-xs underline opacity-60 hover:opacity-100 ml-2">Clear</button>}
+                 {allTags.map(tag => (<button key={tag} onClick={() => s.toggleFilterTag(tag)} className={`text-xs px-2.5 py-1 rounded-full border transition-all ${s.selectedTags.includes(tag) ? 'bg-violet-500 border-violet-500 text-white shadow-md shadow-violet-500/20' : `${s.theme === 'dark' ? 'bg-slate-800 border-slate-700 hover:border-violet-500' : 'bg-white border-slate-300 hover:border-violet-400'}`}`}>#{tag}</button>))}
+                 {s.selectedTags.length > 0 && <button onClick={s.clearFilters} className="text-xs underline opacity-60 hover:opacity-100 ml-2">Clear</button>}
               </div>
             )}
 
-            {isFormOpen && (
-              <div className={`p-6 rounded-xl mb-8 animate-in fade-in slide-in-from-top-4 border-2 ${theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-violet-100 shadow-xl'}`}>
-                <h2 className="text-lg font-bold mb-4 flex items-center gap-2">{editingId ? <Edit2 size={20} className="text-violet-500"/> : <Plus size={20} className="text-violet-500"/>}{editingId ? t.editTitle : t.newTitle}</h2>
-                <form onSubmit={handleSubmit} className="space-y-6">
+            {s.isFormOpen && (
+              <div id="editor-form" className={`p-6 rounded-xl mb-8 animate-in fade-in slide-in-from-top-4 border-2 ${s.theme === 'dark' ? 'bg-slate-900 border-slate-800' : 'bg-white border-violet-100 shadow-xl'}`}>
+                <h2 className="text-lg font-bold mb-4 flex items-center gap-2">{s.editingId ? <Edit2 size={20} className="text-violet-500"/> : <Plus size={20} className="text-violet-500"/>}{s.editingId ? t.editTitle : t.newTitle}</h2>
+                <form onSubmit={(e) => { e.preventDefault(); s.saveBot(); }} className="space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-4">
-                       <div><label className="block text-xs font-bold opacity-60 mb-1">{t.nameLabel}</label><input required name="name" value={formData.name} onChange={handleInputChange} className={`w-full rounded-lg px-3 py-2 text-sm focus:border-violet-500 outline-none border ${inputBg}`} /></div>
-                       <div><label className="block text-xs font-bold opacity-60 mb-1">{t.linkLabel}</label><input name="link" value={formData.link} onChange={handleInputChange} className={`w-full rounded-lg px-3 py-2 text-sm focus:border-violet-500 outline-none border ${inputBg}`} /></div>
+                       <div><label className="block text-xs font-bold opacity-60 mb-1">{t.nameLabel}</label><input required value={s.formData.name} onChange={e => s.updateFormData({name: e.target.value})} className={`w-full rounded-lg px-3 py-2 text-sm outline-none border ${inputBg}`} /></div>
+                       <div><label className="block text-xs font-bold opacity-60 mb-1">{t.linkLabel}</label><input value={s.formData.link} onChange={e => s.updateFormData({link: e.target.value})} className={`w-full rounded-lg px-3 py-2 text-sm outline-none border ${inputBg}`} /></div>
                        <div className="grid grid-cols-2 gap-4">
-                          <div><label className="block text-xs font-bold opacity-60 mb-1">{t.statusLabel}</label><select name="status" value={formData.status} onChange={handleInputChange} className={`w-full rounded-lg px-3 py-2 text-sm focus:border-violet-500 outline-none border ${inputBg}`}>{Object.entries(t.statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
-                          <div><label className="block text-xs font-bold opacity-60 mb-1">{t.dateLabel}</label><input type="date" required name="lastUpdated" value={formData.lastUpdated} onChange={handleInputChange} className={`w-full rounded-lg px-3 py-2 text-sm focus:border-violet-500 outline-none border ${inputBg}`} /></div>
+                          <div><label className="block text-xs font-bold opacity-60 mb-1">{t.statusLabel}</label><select value={s.formData.status} onChange={e => s.updateFormData({status: e.target.value})} className={`w-full rounded-lg px-3 py-2 text-sm outline-none border ${inputBg}`}>{Object.entries(t.statuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
+                          <div><label className="block text-xs font-bold opacity-60 mb-1">{t.dateLabel}</label><input type="date" required value={s.formData.lastUpdated} onChange={e => s.updateFormData({lastUpdated: e.target.value})} className={`w-full rounded-lg px-3 py-2 text-sm outline-none border ${inputBg}`} /></div>
                        </div>
                     </div>
                     <div className="space-y-4">
-                      <div><label className="block text-xs font-bold opacity-60 mb-1">{t.avatarLabel}</label><div className="flex gap-3"><div className={`w-10 h-10 rounded-full flex-shrink-0 bg-cover bg-center border ${theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`} style={{backgroundImage: `url(${formData.avatar})`}}></div><input name="avatar" value={formData.avatar} onChange={handleInputChange} className={`flex-grow rounded-lg px-3 py-2 text-sm focus:border-violet-500 outline-none border ${inputBg}`} placeholder="https://..." /></div></div>
+                      <div><label className="block text-xs font-bold opacity-60 mb-1">{t.avatarLabel}</label><div className="flex gap-3"><div className={`w-10 h-10 rounded-full flex-shrink-0 bg-cover bg-center border ${s.theme === 'dark' ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}`} style={{backgroundImage: `url(${s.formData.avatar})`}}></div><input value={s.formData.avatar} onChange={e => s.updateFormData({avatar: e.target.value})} className={`flex-grow rounded-lg px-3 py-2 text-sm outline-none border ${inputBg}`} placeholder="https://..." /></div></div>
                       <div>
                         <label className="block text-xs font-bold opacity-60 mb-1">{t.tagsLabel}</label>
-                        <div className={`w-full rounded-lg px-3 py-2 text-sm border focus-within:border-violet-500 flex flex-wrap gap-2 ${inputBg}`}>{formData.tags.map(tag => (<span key={tag} className="bg-violet-500/20 text-violet-500 px-1.5 rounded flex items-center gap-1 text-xs">#{tag} <button type="button" onClick={() => removeTag(tag)}><X size={12}/></button></span>))}<input value={currentTagInput} onChange={e => setCurrentTagInput(e.target.value)} onKeyDown={handleAddTag} className="bg-transparent outline-none flex-grow min-w-[100px]" placeholder={t.tagsPlaceholder} /></div>
+                        <div className={`w-full rounded-lg px-3 py-2 text-sm border focus-within:border-violet-500 flex flex-wrap gap-2 ${inputBg}`}>{s.formData.tags.map(tag => (<span key={tag} className="bg-violet-500/20 text-violet-500 px-1.5 rounded flex items-center gap-1 text-xs">#{tag} <button type="button" onClick={() => s.updateFormData({tags: s.formData.tags.filter(t => t !== tag)}) }><X size={12}/></button></span>))}<input value={s.currentTagInput} onChange={e => s.setCurrentTagInput(e.target.value)} onKeyDown={handleAddTag} className="bg-transparent outline-none flex-grow min-w-[100px]" placeholder={t.tagsPlaceholder} /></div>
                       </div>
                     </div>
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t border-slate-500/20">
                      <div>
                         <label className="block text-xs font-bold opacity-60 mb-1">{t.checklistLabel}</label>
-                        <div className="space-y-2 mb-2">{formData.checklist.map(task => (<div key={task.id} className={`flex items-center gap-2 text-sm p-2 rounded ${theme === 'dark' ? 'bg-slate-800' : 'bg-slate-50'}`}><button type="button" onClick={() => toggleTask(task.id)} className={`w-4 h-4 rounded border flex items-center justify-center ${task.done ? 'bg-violet-500 border-violet-500' : 'border-slate-400'}`}>{task.done && <CheckSquare size={10} className="text-white"/>}</button><span className={`flex-grow ${task.done ? 'line-through opacity-50' : ''}`}>{task.text}</span><button type="button" onClick={() => removeTask(task.id)} className="text-slate-500 hover:text-red-500"><X size={14}/></button></div>))}</div>
-                        <input value={currentTaskInput} onChange={e => setCurrentTaskInput(e.target.value)} onKeyDown={addTask} className={`w-full rounded-lg px-3 py-2 text-sm border focus:border-violet-500 outline-none ${inputBg}`} placeholder={t.checklistPlaceholder} />
+                        <div className="space-y-2 mb-2">{s.formData.checklist.map(task => (<div key={task.id} className={`flex items-center gap-2 text-sm p-2 rounded ${s.theme === 'dark' ? 'bg-slate-800' : 'bg-slate-50'}`}><button type="button" onClick={() => s.updateFormData({ checklist: s.formData.checklist.map(t => t.id === task.id ? {...t, done: !t.done} : t) })} className={`w-4 h-4 rounded border flex items-center justify-center ${task.done ? 'bg-violet-500 border-violet-500' : 'border-slate-400'}`}>{task.done && <CheckSquare size={10} className="text-white"/>}</button><span className={`flex-grow ${task.done ? 'line-through opacity-50' : ''}`}>{task.text}</span><button type="button" onClick={() => s.updateFormData({ checklist: s.formData.checklist.filter(t => t.id !== task.id) })} className="text-slate-500 hover:text-red-500"><X size={14}/></button></div>))}</div>
+                        <input value={s.currentTaskInput} onChange={e => s.setCurrentTaskInput(e.target.value)} onKeyDown={addTask} className={`w-full rounded-lg px-3 py-2 text-sm border outline-none ${inputBg}`} placeholder={t.checklistPlaceholder} />
                      </div>
-                     <div className="flex flex-col"><label className="block text-xs font-bold opacity-60 mb-1">{t.notesLabel}</label><textarea name="notes" value={formData.notes} onChange={handleInputChange} className={`w-full h-full min-h-[100px] rounded-lg px-3 py-2 text-sm border focus:border-violet-500 outline-none resize-none ${inputBg}`} /></div>
+                     <div className="flex flex-col"><label className="block text-xs font-bold opacity-60 mb-1">{t.notesLabel}</label><textarea value={s.formData.notes} onChange={e => s.updateFormData({notes: e.target.value})} className={`w-full h-full min-h-[100px] rounded-lg px-3 py-2 text-sm border outline-none resize-none ${inputBg}`} /></div>
                   </div>
                   <div className="flex justify-end pt-2"><button type="submit" className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-2.5 rounded-lg font-bold shadow-lg shadow-emerald-900/20 transition-all transform hover:scale-105"><Save size={18} /><span>{t.saveBtn}</span></button></div>
                 </form>
               </div>
             )}
 
-            {bots.length === 0 ? (
+            {s.bots.length === 0 ? (
               <div className="text-center py-24 opacity-60 border-2 border-dashed rounded-3xl border-slate-500/20">
                 <CheckSquare size={48} className="mx-auto mb-4 opacity-50 text-violet-500" />
                 <p className="text-xl font-medium">{t.emptyList}</p>
                 <p className="text-sm mt-2">{t.emptyListSub}</p>
               </div>
             ) : (
-              <div className={viewMode === 'grid' ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" : "flex flex-col gap-3"}>
+              <div className={s.viewMode === 'grid' ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5" : "flex flex-col gap-3"}>
                 {processedBots.map(bot => (
-                  <BotCard 
-                    key={bot.id} 
-                    bot={bot} 
-                    onDelete={deleteBot} 
-                    onEdit={startEdit} 
-                    onDuplicate={duplicateBot}
-                    onPin={togglePin}
-                    t={t} 
-                    theme={theme} 
-                    onToggleCheckitem={toggleCheckitemInList} 
-                    viewMode={viewMode}
-                  />
+                  <BotCard key={bot.id} bot={bot} t={t} theme={s.theme} viewMode={s.viewMode} />
                 ))}
               </div>
             )}
 
             <div className="mt-20 pt-8 border-t border-slate-500/20 flex flex-col md:flex-row justify-between items-center text-xs opacity-60 gap-4">
-               <div className="flex items-center gap-4"><span>Local Storage v1.1.2</span><a href="https://t.me/itsfantomaslab" target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-blue-400 transition-colors cursor-pointer group"><MessageCircle size={14} className="group-hover:scale-110 transition-transform"/> <span>Telegram</span></a></div>
+               <div className="flex items-center gap-4"><span>Zustand Persistence v1.1.4</span><a href="https://t.me/itsfantomaslab" target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-blue-400 transition-colors cursor-pointer group"><MessageCircle size={14} className="group-hover:scale-110 transition-transform"/> <span>Telegram</span></a></div>
                <div className="flex flex-wrap items-center gap-4">
-                 <button onClick={shareProfile} className={`flex items-center gap-1 transition-colors ${copyFeedback ? 'text-emerald-500' : 'hover:text-violet-500'}`}>{copyFeedback ? <CheckCircle size={14}/> : <Share2 size={14}/>} {copyFeedback ? t.shareSuccess : t.shareBtn}</button>
+                 <button onClick={shareProfile} className={`flex items-center gap-1 transition-colors ${s.copyFeedback ? 'text-emerald-500' : 'hover:text-violet-500'}`}>{s.copyFeedback ? <CheckCircle size={14}/> : <Share2 size={14}/>} {s.copyFeedback ? t.shareSuccess : t.shareBtn}</button>
                  <button onClick={exportData} className="flex items-center gap-1 hover:text-violet-500 transition-colors"><Download size={14} /> {t.backupBtn}</button>
                  <label className="flex items-center gap-1 hover:text-violet-500 transition-colors cursor-pointer"><Upload size={14} /> {t.importBtn}<input type="file" multiple accept=".json" onChange={importData} className="hidden" /></label>
                  <div className="w-px h-4 bg-slate-500/30 mx-2"></div>
-                 <button onClick={resetAll} className="flex items-center gap-1 hover:text-red-500 transition-colors"><RefreshCw size={14} /> {t.resetBtn}</button>
+                 <button onClick={s.resetAll} className="flex items-center gap-1 hover:text-red-500 transition-colors"><RefreshCw size={14} /> {t.resetBtn}</button>
                </div>
             </div>
           </div>
@@ -623,7 +603,6 @@
             <div className="min-h-screen flex items-center justify-center bg-slate-950 text-red-400 p-8">
               <div className="max-w-xl border border-red-500/30 bg-red-900/10 p-6 rounded-xl">
                 <h1 className="text-2xl font-bold mb-2 flex items-center gap-2"><AlertOctagon /> Упс, ошибка!</h1>
-                <p className="text-sm opacity-80 mb-4">Скорее всего, конфликт версий или блокировка браузера.</p>
                 <pre className="bg-black/50 p-4 rounded text-xs overflow-auto font-mono">{this.state.error.toString()}</pre>
                 <button onClick={() => window.location.reload()} className="mt-4 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded text-white text-sm">Перезагрузить</button>
               </div>
